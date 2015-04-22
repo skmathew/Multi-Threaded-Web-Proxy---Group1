@@ -1,4 +1,5 @@
-//129.120.151.96 //CSE03
+//129.120.151.96 // CSE03
+//129.120.151.94 // CSE01
 /*----------------------------------------------
  *	GROUP 1: Olawale Akinnawo, Sherin Mathew, Viivi Raina
  *	Project 2: Proxy Server
@@ -14,10 +15,14 @@
 #include <sys/types.h>	/* system type defintions */
 #include <sys/socket.h>	/* network system functions */
 #include <netinet/in.h>	/* protocol & struct definitions */
+#include <arpa/inet.h>
+#include <netdb.h>
 
-#define BACKLOG	5
+#define BACKLOG		5
 #define BUF_SIZE	1024
-#define LISTEN_PORT	65001
+#define LISTEN_PORT	9003
+
+#define BLOCKED_LIST "blocked.txt" // List of blocked sites
 
 int threadCount = BACKLOG;
 void *client_handler(void *sock_desc);
@@ -52,6 +57,13 @@ int main(int argc, char *argv[]){
     addr_mine.sin_addr.s_addr = htonl(INADDR_ANY);
     addr_mine.sin_port = htons((unsigned short)LISTEN_PORT);
     
+    // Enable the socket to reuse the address
+     if (setsockopt(sock_listen, SOL_SOCKET, SO_REUSEADDR, &reuseaddr,
+     	sizeof(int)) == -1) {
+         perror("setsockopt");
+     	close(sock_listen);
+         exit(1);
+    }	
     status = bind(sock_listen, (struct sockaddr *) &addr_mine,
                   sizeof (addr_mine));
     if (status < 0) {
@@ -121,85 +133,195 @@ void *client_handler(void *sock_desc) {
     char buffer[BUF_SIZE], text[80],buf_send[BUF_SIZE];
     char * pch;
     
-    while ((msg_size = recv(sock, buffer, BUF_SIZE, 0)) > 0) {
-        
-        //printf("The buffer message is: %s \nlast line\n", buffer);
+    while ((msg_size = recv(sock, buffer, BUF_SIZE, 0)) > 0)
+	{    
         pch = strtok (buffer,"GET /");
-        printf ("%s\n",pch);
+        printf ( "%s \n", pch );
         
-        //checks to see of the website is on the blocked list
-        if (blocked_websites(char *pch)==0)
+        if ( (blocked_websites(pch))  == 0 )
         {
-            sprintf(buffer, "<html><title>Blocked website</title></html>\0");
-            send(sock, buffer, sizeof(buffer), 0);
-            close(sock);
-            free(sock_desc);
-            threadCount++;
-            return;
+			// Checks to see of the website is on the blocked list
+            sprintf(buffer, "<html><body>Blocked website!<br><br></body></html>\0");
+			send(sock, buffer, sizeof(buffer), 0);
         }
-        
-		// FOLLOWING COMMENTS ARE FROM THE PYTHON CODE:
-		
-		// Extract the filename from the given message
-		
-		//if( file is in cache ) {
-			// Check whether the file exist in the cache
-			// ProxyServer finds a cache hit and generates a response message
-		//}
-		//else if( file is not in cache ) {
-			// Error handling for file not found in cache:
-			//if( file not found ) {
-				// Create a socket on the proxyserver
-				// Connect to the socket to port 80
-				// Create a temporary file on this socket and ask port 80 for the file requested by the client
-				// Read the response into buffer
-				// Create a new file in the cache for the requested file.
-				// Also send the response in the buffer to client socket and the corresponding file in the cache
+		else
+		{
+			// Check if page is already in cache
+			
+			//if( page is NOT in the cache ) {
+				// HTTP GET request for page
+				if( GET_page( pch ) == 0 )
+					printf(" ERROR!!!! \n ");
+				//else
+					// Get page from cache
 			//}
-			//else {
-				//HTTP response message for file not found
-			//}
-			// close client socket?
-		//}
-        
-        
-        
-        
-        //strcpy(buffer, "POST /www.yahoo.com HTTP/1.0");
-        //msg_size =strlen(buffer);
-        //msg_size=send(sock,buffer,msg_size,0);
-    }
-    
-    close(sock);
+		}
+	}
+	close(sock);
     free(sock_desc);
     threadCount++;
+    return;
 }
 
-int blocked_websites(char *pch)
-{
+/*----------------------------------------------
+ *	CHECK FOR BLOCKED WEBSITE
+ *	Return 0 if blocked, 1 if not blocked
+ *----------------------------------------------*/
+int blocked_websites(char *pch) {
     FILE *fptr;
-    char *temp;
+    char temp[1024];
     int value;
 
-    fptr=fopen("blocked.txt","r");
-    if(fptr==NULL){
-        printf("Error!");
+	// Open read-only file
+    if( (fptr = fopen( BLOCKED_LIST, "r" )) == NULL ) {
+        printf( "Error: blocked_websites could not open file: %s \n", BLOCKED_LIST );
         exit(1);
     }
     
-    while(fscanf(fptr, "%s ",temp)!= EOF) {
+	// Read through blocked sites list
+    while( fscanf(fptr, "%s ",temp) != EOF ) {
         value = strcmp(temp, pch);
-        if (value==0)
+        if ( value == 0 )
         {
             fclose(fptr);
-            return 0;
+            return 0; // Site is blocked
         }
     }
-    
-    
     fclose(fptr);
-    return 1;
-    
-    
+    return 1; // Site is not blocked
+}
+
+
+
+
+
+
+					char *build_get_query(char *host, char *page)
+					{
+					  char *query;
+					  char *getpage = page;
+					  char *tpl = "GET /%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\n\r\n";
+					  if(getpage[0] == '/'){
+						getpage = getpage + 1;
+						fprintf(stderr,"Removing leading \"/\", converting %s to %s\n", page, getpage);
+					  }
+					  // -5 is to consider the %s %s %s in tpl and the ending \0
+					  query = (char *)malloc(strlen(host)+strlen(getpage)+strlen("HTMLGET 1.0")+strlen(tpl)-5);
+					  sprintf(query, tpl, getpage, host, "HTMLGET 1.0");
+					  return query;
+					}	
+
+
+
+
+
+
+/*----------------------------------------------
+ *	HTTP GET REQUEST
+ *	Return 0 on fail, 1 on success
+ *----------------------------------------------*/
+ 
+int GET_page( char *host )
+{
+	int GET_SOCK, tmpres;
+	struct sockaddr_in *remote;
+	char IP[15];
+	struct hostent *hent;
+	char *get;
+
+	// Get IP address of host
+	if( (hent = gethostbyname(host)) == NULL ) {
+		printf( "Error: can't get host IP \n" );
+		return 0;
+	}
+	if( inet_ntop(AF_INET, (void *)hent->h_addr_list[0], IP, 15) == NULL )
+	{
+		printf( "Error: can't resolve host \n" );
+		return 0;
+	}
+
+	// Create socket for HTTP GET request 
+	if( (GET_SOCK = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0){
+		printf( "Error: could not create GET_SOCK \n" );
+		return 0;
+	}
+	remote = (struct sockaddr_in *)malloc(sizeof(struct sockaddr_in *));
+	remote->sin_family = AF_INET;
+	
+	// ??
+	tmpres = inet_pton(AF_INET, IP, (void *)(&(remote->sin_addr.s_addr)));
+	if( tmpres < 0) {
+		perror("Can't set remote->sin_addr.s_addr");
+		exit(1);
+	}
+	else if(tmpres == 0) {
+		fprintf(stderr, "%s is not a valid IP address\n", IP);
+		exit(1);
+	}
+	remote->sin_port = htons(80);
+	
+	// Connect to remote host
+	if( connect(GET_SOCK, (struct sockaddr *)remote, sizeof(struct sockaddr)) < 0 ) {
+		perror("Could not connect");
+		exit(1);
+	}
+	
+	// Build GET message
+	get = build_get_query(host, "");	// REWRITE
+	
+	// Send query to remote server
+	int sent = 0;
+	while(sent < strlen(get))
+	{
+		tmpres = send(GET_SOCK, get+sent, strlen(get)-sent, 0);
+		if(tmpres == -1){
+			perror("Can't send query");
+			exit(1);
+		}
+		sent += tmpres;
+	}
+	
+	// Receive the page
+	char buf[BUFSIZ+1];
+	memset(buf, 0, sizeof(buf));
+	int htmlstart = 0;
+	char * htmlcontent;
+	
+	// Create & open new file to write the page
+	FILE *fptr;
+    if( (fptr = fopen( host, "ab+" )) == NULL ) {
+        printf( "Error: could not create file: %s \n", host );
+        exit(1);
+    }
+	
+	while((tmpres = recv(GET_SOCK, buf, BUFSIZ, 0)) > 0)
+	{
+		if(htmlstart == 0) {
+			htmlcontent = strstr(buf, "\r\n\r\n");
+			if(htmlcontent != NULL){
+				htmlstart = 1;
+				htmlcontent += 4;
+			}
+		}
+		else
+			htmlcontent = buf;
+	
+		if(htmlstart) {
+			//fprintf(stdout, htmlcontent);
+			
+			// Redirect page to a new file
+			fprintf( fptr, htmlcontent );
+		}
+		
+		memset(buf, 0, tmpres);
+	}	
+	if(tmpres < 0)
+		perror("Error receiving data");
+ 
+	fclose(fptr);
+	free(get);
+	free(remote);
+	close(GET_SOCK);
+	return 1;
 }
 
