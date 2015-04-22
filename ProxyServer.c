@@ -1,4 +1,4 @@
-//129.120.151.96 //CSE03
+//129.120.151.96:9003 //CSE03
 /*----------------------------------------------
  *	GROUP 1: Olawale Akinnawo, Sherin Mathew, Viivi Raina
  *	Project 2: Proxy Server
@@ -17,7 +17,7 @@
 
 #define BACKLOG	5
 #define BUF_SIZE	1024
-#define LISTEN_PORT	65001
+#define LISTEN_PORT	9003
 
 int threadCount = BACKLOG;
 void *client_handler(void *sock_desc);
@@ -51,6 +51,15 @@ int main(int argc, char *argv[]){
     addr_mine.sin_family = AF_INET;
     addr_mine.sin_addr.s_addr = htonl(INADDR_ANY);
     addr_mine.sin_port = htons((unsigned short)LISTEN_PORT);
+    
+    // /* Enable the socket to reuse the address */
+     if (setsockopt(sock_listen, SOL_SOCKET, SO_REUSEADDR, &reuseaddr,
+     	sizeof(int)) == -1) {
+         perror("setsockopt");
+     	close(sock_listen);
+         exit(1);
+     }
+    
     
     status = bind(sock_listen, (struct sockaddr *) &addr_mine,
                   sizeof (addr_mine));
@@ -123,14 +132,25 @@ void *client_handler(void *sock_desc) {
     
     while ((msg_size = recv(sock, buffer, BUF_SIZE, 0)) > 0) {
         
-        //printf("The buffer message is: %s \nlast line\n", buffer);
+        printf("The buffer message is: %s \nlast line\n", buffer);
         pch = strtok (buffer,"GET /");
         printf ("%s\n",pch);
         
         //checks to see of the website is on the blocked list
-        if (blocked_websites(char *pch)==0)
+        if ((blocked_websites(pch))==0)
         {
-            sprintf(buffer, "<html><title>Blocked website</title></html>\0");
+            sprintf(buffer, "<html><title>Blocked website</title><body><p><big>This Website is Blocked!</big></p><body></html>\0");
+            send(sock, buffer, sizeof(buffer), 0);
+            close(sock);
+            free(sock_desc);
+            threadCount++;
+            return;
+        }
+        
+        
+        else
+        {
+            sprintf(buffer, "<html><title>Good website</title><body><p><big>This Website is not Blocked!</big></p><body></html>\0");
             send(sock, buffer, sizeof(buffer), 0);
             close(sock);
             free(sock_desc);
@@ -178,16 +198,14 @@ void *client_handler(void *sock_desc) {
 int blocked_websites(char *pch)
 {
     FILE *fptr;
-    char *temp;
+    char temp[1024];
     int value;
-
     fptr=fopen("blocked.txt","r");
     if(fptr==NULL){
         printf("Error!");
         exit(1);
-    }
-    
-    while(fscanf(fptr, "%s ",temp)!= EOF) {
+}
+    while(fscanf(fptr, "%s\n", temp)!= EOF) {
         value = strcmp(temp, pch);
         if (value==0)
         {
@@ -195,7 +213,6 @@ int blocked_websites(char *pch)
             return 0;
         }
     }
-    
     
     fclose(fptr);
     return 1;
