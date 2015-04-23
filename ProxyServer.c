@@ -58,7 +58,9 @@ int main(int argc, char *argv[]){
     addr_mine.sin_addr.s_addr = htonl(INADDR_ANY);
     addr_mine.sin_port = htons((unsigned short)LISTEN_PORT);
     
+   
     // Enable the socket to reuse the address
+    
      if (setsockopt(sock_listen, SOL_SOCKET, SO_REUSEADDR, &reuseaddr,
      	sizeof(int)) == -1) {
          perror("setsockopt");
@@ -81,6 +83,7 @@ int main(int argc, char *argv[]){
         exit(1);
     }
     
+    
     addr_size = sizeof(struct sockaddr_in);
 	
 	// Server feedback
@@ -88,6 +91,7 @@ int main(int argc, char *argv[]){
 	
     printf("waiting for a client\n");
     while(1) {
+
         if (threadCount < 1) {
             sleep(1);
         }
@@ -117,6 +121,7 @@ int main(int argc, char *argv[]){
             free(sock_tmp);
             exit(1);
         }
+        
     }
     
     return 0;
