@@ -141,7 +141,11 @@ void *client_handler(void *sock_desc) {
     int count =0;
     
     FILE *fp;
+    FILE *fr;
+    char *line;
     char *source = NULL;
+    size_t len = 0;
+    char badword[80];
  
     
     while ((msg_size = recv(sock, buffer, BUF_SIZE, 0)) > 0)
@@ -192,8 +196,18 @@ void *client_handler(void *sock_desc) {
                         }
                         fclose(fp);
                         //printf("%s",source);
-                        source=str_replace(source,"Your","*****");
-                        
+                        fr = fopen ("list.txt", "r");
+                        if (fr!=NULL)
+                        {
+                             while((getline(&line, &len, fr)) >-1)
+                             {
+                                 //printf("%s",line);
+                                 line = strtok (line," ");
+                                 source=str_replace(source,line,"******");
+                             }
+                        }
+                        free(line);
+                        fclose(fr);
                         send(sock, source, count+1, 0);
                         //free(source);
                     }
