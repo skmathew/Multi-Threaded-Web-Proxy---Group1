@@ -17,6 +17,8 @@
 #include <netinet/in.h>	/* protocol & struct definitions */
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <fcntl.h>
+#include <netinet/tcp.h>
 
 #define BACKLOG		5
 #define BUF_SIZE	1024
@@ -27,6 +29,7 @@
 int threadCount = BACKLOG;
 void *client_handler(void *sock_desc);
 int blocked_websites(char *name);
+
 
 
 /*----------------------------------------------
@@ -85,7 +88,6 @@ int main(int argc, char *argv[]){
 	// Server feedback
     printf("Group 1 proxy server witing for client...\n");
 	
-    printf("waiting for a client\n");
     while(1) {
         if (threadCount < 1) {
             sleep(1);
@@ -146,15 +148,33 @@ void *client_handler(void *sock_desc) {
         }
 		else
 		{
-			// Check if page is already in cache
+			// If page not found in chache...
+			if( access( pch, F_OK ) == -1 ) {
+				// Get page...
+				if( GET_page( pch ) == 0 ) {
+					printf( "Error: could not GET_page\n" );
+					close(sock);
+					free(sock_desc);
+					threadCount++;
+					return;
+				}
+			}
 			
-			//if( page is NOT in the cache ) {
-				// HTTP GET request for page
-				if( GET_page( pch ) == 0 )
-					printf(" ERROR!!!! \n ");
-				//else
-					// Get page from cache
-			//}
+			// Get file from cache
+			FILE *fptr;
+			if( (fptr = fopen( pch, "r" )) == NULL ) {
+				printf( "Error: could not open file: %s \n", pch );
+				close(sock);
+				free(sock_desc);
+				threadCount++;
+				return;
+			}
+			
+			// Send page to client
+			char buffer[BUF_SIZE];
+			while( (fread(buffer, 1, BUF_SIZE, fptr)) > 0 ) {
+				send(sock, buffer, BUF_SIZE, 0);
+			}
 		}
 	}
 	close(sock);
@@ -162,6 +182,8 @@ void *client_handler(void *sock_desc) {
     threadCount++;
     return;
 }
+
+
 
 /*----------------------------------------------
  *	CHECK FOR BLOCKED WEBSITE
@@ -193,135 +215,60 @@ int blocked_websites(char *pch) {
 
 
 
-
-
-
-					char *build_get_query(char *host, char *page)
-					{
-					  char *query;
-					  char *getpage = page;
-					  char *tpl = "GET /%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\n\r\n";
-					  if(getpage[0] == '/'){
-						getpage = getpage + 1;
-						fprintf(stderr,"Removing leading \"/\", converting %s to %s\n", page, getpage);
-					  }
-					  // -5 is to consider the %s %s %s in tpl and the ending \0
-					  query = (char *)malloc(strlen(host)+strlen(getpage)+strlen("HTMLGET 1.0")+strlen(tpl)-5);
-					  sprintf(query, tpl, getpage, host, "HTMLGET 1.0");
-					  return query;
-					}	
-
-
-
-
-
-
 /*----------------------------------------------
  *	HTTP GET REQUEST
  *	Return 0 on fail, 1 on success
  *----------------------------------------------*/
- 
-int GET_page( char *host )
+int GET_page(char *host)
 {
-	int GET_SOCK, tmpres;
-	struct sockaddr_in *remote;
-	char IP[15];
-	struct hostent *hent;
-	char *get;
-
-	// Get IP address of host
-	if( (hent = gethostbyname(host)) == NULL ) {
-		printf( "Error: can't get host IP \n" );
-		return 0;
-	}
-	if( inet_ntop(AF_INET, (void *)hent->h_addr_list[0], IP, 15) == NULL )
-	{
-		printf( "Error: can't resolve host \n" );
-		return 0;
-	}
-
-	// Create socket for HTTP GET request 
-	if( (GET_SOCK = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0){
-		printf( "Error: could not create GET_SOCK \n" );
-		return 0;
-	}
-	remote = (struct sockaddr_in *)malloc(sizeof(struct sockaddr_in *));
-	remote->sin_family = AF_INET;
-	
-	// ??
-	tmpres = inet_pton(AF_INET, IP, (void *)(&(remote->sin_addr.s_addr)));
-	if( tmpres < 0) {
-		perror("Can't set remote->sin_addr.s_addr");
+	char buffer[BUF_SIZE];       
+	struct hostent *host_ent;
+	struct sockaddr_in addr;
+	int on = 1, get_socket;     
+ 
+	// Get host entity
+	if( (host_ent = gethostbyname(host)) == NULL ) {
+		herror("gethostbyname");
 		exit(1);
 	}
-	else if(tmpres == 0) {
-		fprintf(stderr, "%s is not a valid IP address\n", IP);
-		exit(1);
+	bcopy( host_ent->h_addr, &addr.sin_addr, host_ent->h_length );
+	addr.sin_port = htons(80); // Use port 80 for http get request
+	addr.sin_family = AF_INET;
+	get_socket = socket( PF_INET, SOCK_STREAM, IPPROTO_TCP );
+	setsockopt( get_socket, IPPROTO_TCP, TCP_NODELAY, (const char *)&on, sizeof(int) );
+	
+	// Error checking
+	if(get_socket == -1){
+		printf( "Error: GET_page could not create socket \n" ); // get_socket not created
+		return 0;
 	}
-	remote->sin_port = htons(80);
-	
-	// Connect to remote host
-	if( connect(GET_SOCK, (struct sockaddr *)remote, sizeof(struct sockaddr)) < 0 ) {
-		perror("Could not connect");
-		exit(1);
-	}
-	
-	// Build GET message
-	get = build_get_query(host, "");	// REWRITE
-	
-	// Send query to remote server
-	int sent = 0;
-	while(sent < strlen(get))
-	{
-		tmpres = send(GET_SOCK, get+sent, strlen(get)-sent, 0);
-		if(tmpres == -1){
-			perror("Can't send query");
-			exit(1);
-		}
-		sent += tmpres;
+	if( connect(get_socket, (struct sockaddr *)&addr, sizeof(struct sockaddr_in)) == -1 ){
+		printf( "Error: get_socket could not connect to %s\n", host);
+		return 0;
 	}
 	
-	// Receive the page
-	char buf[BUFSIZ+1];
-	memset(buf, 0, sizeof(buf));
-	int htmlstart = 0;
-	char * htmlcontent;
+	// Send page request
+	write(get_socket, "GET /\r\n", strlen("GET /\r\n"));  
+	bzero(buffer, BUF_SIZE);
 	
 	// Create & open new file to write the page
 	FILE *fptr;
     if( (fptr = fopen( host, "ab+" )) == NULL ) {
         printf( "Error: could not create file: %s \n", host );
-        exit(1);
+		shutdown(get_socket, SHUT_RDWR); // Shut down socket
+		close(get_socket); // Close socket
+        return 0;
     }
 	
-	while((tmpres = recv(GET_SOCK, buf, BUFSIZ, 0)) > 0)
-	{
-		if(htmlstart == 0) {
-			htmlcontent = strstr(buf, "\r\n\r\n");
-			if(htmlcontent != NULL){
-				htmlstart = 1;
-				htmlcontent += 4;
-			}
-		}
-		else
-			htmlcontent = buf;
-	
-		if(htmlstart) {
-			//fprintf(stdout, htmlcontent);
-			
-			// Redirect page to a new file
-			fprintf( fptr, htmlcontent );
-		}
-		
-		memset(buf, 0, tmpres);
-	}	
-	if(tmpres < 0)
-		perror("Error receiving data");
+	// Read page to file
+	while( read(get_socket, buffer, BUF_SIZE - 1) != 0 ) {
+		fprintf( fptr, "%s", buffer );
+		bzero( buffer, BUF_SIZE );
+	}
  
-	fclose(fptr);
-	free(get);
-	free(remote);
-	close(GET_SOCK);
+	fclose( fptr ); // Close file
+	shutdown(get_socket, SHUT_RDWR); // Shut down socket
+	close(get_socket); // Close socket
+ 
 	return 1;
 }
-
