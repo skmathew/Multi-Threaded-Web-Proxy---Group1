@@ -25,6 +25,11 @@
 #define LISTEN_PORT	9003
 
 #define BLOCKED_LIST "blocked.txt" // List of blocked sites
+#define WORD_LIST "list.txt" // List of inappropriate words
+
+// Boolean
+#define TRUE 1
+#define FALSE 0
 
 int threadCount = BACKLOG;
 void *client_handler(void *sock_desc);
@@ -86,7 +91,7 @@ int main(int argc, char *argv[]){
     addr_size = sizeof(struct sockaddr_in);
 	
 	// Server feedback
-    printf("Group 1 proxy server witing for client...\n");
+    printf("Group 1 proxy server waiting for client...\n");
 	
     while(1) {
         if (threadCount < 1) {
@@ -124,6 +129,36 @@ int main(int argc, char *argv[]){
 }
 
 
+char *str_replace ( const char *string, const char *substr, const char *replacement ){
+    char *tok = NULL;
+    char *newstr = NULL;
+    char *oldstr = NULL;
+    char *head = NULL;
+    
+    /* if either substr or replacement is NULL, duplicate string a let caller handle it */
+    if ( substr == NULL || replacement == NULL ) return strdup (string);
+    newstr = strdup (string);
+    head = newstr;
+    while ( (tok = strstr ( head, substr ))){
+        oldstr = newstr;
+        newstr = malloc ( strlen ( oldstr ) - strlen ( substr ) + strlen ( replacement ) + 1 );
+        /*failed to alloc mem, free old string and return NULL */
+        if ( newstr == NULL ){
+            free (oldstr);
+            return NULL;
+        }
+        memcpy ( newstr, oldstr, tok - oldstr );
+        memcpy ( newstr + (tok - oldstr), replacement, strlen ( replacement ) );
+        memcpy ( newstr + (tok - oldstr) + strlen( replacement ), tok + strlen ( substr ), strlen ( oldstr ) - strlen ( substr ) - ( tok - oldstr ) );
+        memset ( newstr + strlen ( oldstr ) - strlen ( substr ) + strlen ( replacement ) , 0, 1 );
+        /* move back head right after the last replacement */
+        head = newstr + (tok - oldstr) + strlen( replacement );
+        free (oldstr);
+    }
+    return newstr;
+}
+
+
 /*----------------------------------------------
  *	CLIENT HANDLER
  *----------------------------------------------*/
@@ -132,27 +167,33 @@ void *client_handler(void *sock_desc) {
     int msg_size;
     char buf[BUF_SIZE];
     int sock = *(int*)sock_desc;
-    char buffer[BUF_SIZE], text[80],buf_send[BUF_SIZE];
-    char * pch;
+    char text[80],buf_send[BUF_SIZE];
+	char buffer[BUF_SIZE];
+	char *sendBuffer;
+    char *URL;
     
-    while ((msg_size = recv(sock, buffer, BUF_SIZE, 0)) > 0)
-	{    
-        pch = strtok (buffer,"GET /");
-        printf ( "%s \n", pch );
-        
-        if ( (blocked_websites(pch))  == 0 )
+    while ( (msg_size = recv(sock, buffer, BUF_SIZE, 0)) > 0 )
+	{
+		// Get page URL from message in buffer
+        URL = strtok ( buffer, "GET /" ); // Expected message format: "<method GET> /<page URL> <HTTP protocol> ..."
+        printf ( "\tURL:  %s \n", URL ); // Server feedback
+		        
+		// Check if site is blocked
+        if ( (blocked_site(URL)) == TRUE )
         {
-			// Checks to see of the website is on the blocked list
-            sprintf(buffer, "<html><body>Blocked website!<br><br></body></html>\0");
-			send(sock, buffer, sizeof(buffer), 0);
+			memset( buffer, 0, BUF_SIZE );
+            sprintf( buffer, "<html><body><br> Sorry! That is a blocked website! <br></html></body>", URL );
+			send( sock, buffer, sizeof(buffer), 0 );
         }
 		else
 		{
-			// If page not found in chache...
-			if( access( pch, F_OK ) == -1 ) {
-				// Get page...
-				if( GET_page( pch ) == 0 ) {
-					printf( "Error: could not GET_page\n" );
+			// Check if page is saved in cache
+			if( access( URL, F_OK ) == -1 )
+			{
+				printf( "\tGET:  %s\n", URL ); // Server feedback
+				
+				// Get page (if not in cache)
+				if( get_page( URL ) == FALSE ) {
 					close(sock);
 					free(sock_desc);
 					threadCount++;
@@ -162,8 +203,17 @@ void *client_handler(void *sock_desc) {
 			
 			// Get file from cache
 			FILE *fptr;
-			if( (fptr = fopen( pch, "r" )) == NULL ) {
-				printf( "Error: could not open file: %s \n", pch );
+			if( (fptr = fopen( URL, "r" )) == NULL ) {
+				printf( "\tError: client_handler could not open file: %s \n", URL );
+				close(sock);
+				free(sock_desc);
+				threadCount++;
+				return;
+			}
+			
+			FILE *fptr_words;
+			if( (fptr_words = fopen( WORD_LIST, "r" )) == NULL ) {
+				printf( "\tError: client_handler could not open file: %s \n", WORD_LIST );
 				close(sock);
 				free(sock_desc);
 				threadCount++;
@@ -171,9 +221,15 @@ void *client_handler(void *sock_desc) {
 			}
 			
 			// Send page to client
-			char buffer[BUF_SIZE];
+			char *token;
+			size_t len = 0;
 			while( (fread(buffer, 1, BUF_SIZE, fptr)) > 0 ) {
-				send(sock, buffer, BUF_SIZE, 0);
+				sendBuffer = buffer;
+				while( (getline(&token, &len, fptr_words)) >-1 ) {
+                    token = strtok (token," ");
+					sendBuffer = str_replace(buffer, token, "*****");
+				}
+				send(sock, sendBuffer, BUF_SIZE, 0);
 			}
 		}
 	}
@@ -187,49 +243,50 @@ void *client_handler(void *sock_desc) {
 
 /*----------------------------------------------
  *	CHECK FOR BLOCKED WEBSITE
- *	Return 0 if blocked, 1 if not blocked
+ *	Return TRUE if blocked, FALSE if not blocked
  *----------------------------------------------*/
-int blocked_websites(char *pch) {
+int blocked_site( char *URL )
+{
     FILE *fptr;
     char temp[1024];
-    int value;
 
-	// Open read-only file
+	// Open list of blocked sites
     if( (fptr = fopen( BLOCKED_LIST, "r" )) == NULL ) {
-        printf( "Error: blocked_websites could not open file: %s \n", BLOCKED_LIST );
+        printf( "\tError: blocked_site() could not open file: %s\n", BLOCKED_LIST );
         exit(1);
     }
     
 	// Read through blocked sites list
     while( fscanf(fptr, "%s ",temp) != EOF ) {
-        value = strcmp(temp, pch);
-        if ( value == 0 )
+        if ( (strcmp(temp, URL)) == 0 )
         {
+			printf( "\tBLOCKED: %s\n", URL ); // Server feedback
             fclose(fptr);
-            return 0; // Site is blocked
+            return TRUE; // Site is blocked
         }
     }
     fclose(fptr);
-    return 1; // Site is not blocked
+    return FALSE; // Site is not blocked
 }
 
 
 
 /*----------------------------------------------
  *	HTTP GET REQUEST
- *	Return 0 on fail, 1 on success
+ *	Return TRUE on success, FALSE on fail
  *----------------------------------------------*/
-int GET_page(char *host)
+int get_page(char *host)
 {
-	char buffer[BUF_SIZE];       
+	char buffer[BUF_SIZE];  
 	struct hostent *host_ent;
 	struct sockaddr_in addr;
 	int on = 1, get_socket;     
+	FILE *fptr;
  
 	// Get host entity
 	if( (host_ent = gethostbyname(host)) == NULL ) {
-		herror("gethostbyname");
-		exit(1);
+		printf( "\tError: get_page could not gethostbyname\n" );
+		return FALSE;
 	}
 	bcopy( host_ent->h_addr, &addr.sin_addr, host_ent->h_length );
 	addr.sin_port = htons(80); // Use port 80 for http get request
@@ -237,31 +294,31 @@ int GET_page(char *host)
 	get_socket = socket( PF_INET, SOCK_STREAM, IPPROTO_TCP );
 	setsockopt( get_socket, IPPROTO_TCP, TCP_NODELAY, (const char *)&on, sizeof(int) );
 	
-	// Error checking
-	if(get_socket == -1){
-		printf( "Error: GET_page could not create socket \n" ); // get_socket not created
-		return 0;
+	// Error checking socket
+	if(get_socket == -1) {
+		printf( "\tError: get_page could not create socket\n" ); // get_socket not created
+		return FALSE;
 	}
 	if( connect(get_socket, (struct sockaddr *)&addr, sizeof(struct sockaddr_in)) == -1 ){
-		printf( "Error: get_socket could not connect to %s\n", host);
-		return 0;
+		printf( "\tError: get_page could not connect socket to %s\n", host);
+		return FALSE;
 	}
 	
-	// Send page request
-	write(get_socket, "GET /\r\n", strlen("GET /\r\n"));  
-	bzero(buffer, BUF_SIZE);
-	
 	// Create & open new file to write the page
-	FILE *fptr;
     if( (fptr = fopen( host, "ab+" )) == NULL ) {
-        printf( "Error: could not create file: %s \n", host );
+        printf( "\tError: get_page could not create file: %s\n", host );
 		shutdown(get_socket, SHUT_RDWR); // Shut down socket
 		close(get_socket); // Close socket
-        return 0;
+        return FALSE;
     }
 	
-	// Read page to file
+	// Send page request
+	write( get_socket, "GET /\r\n", strlen("GET /\r\n") );  
+	bzero( buffer, BUF_SIZE );
+	
+	// Read page...
 	while( read(get_socket, buffer, BUF_SIZE - 1) != 0 ) {
+		// Write page to file
 		fprintf( fptr, "%s", buffer );
 		bzero( buffer, BUF_SIZE );
 	}
@@ -269,6 +326,5 @@ int GET_page(char *host)
 	fclose( fptr ); // Close file
 	shutdown(get_socket, SHUT_RDWR); // Shut down socket
 	close(get_socket); // Close socket
- 
-	return 1;
+	return TRUE;
 }
