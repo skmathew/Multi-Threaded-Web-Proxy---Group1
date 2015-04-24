@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 Obama 
+=======
+hate   
+>>>>>>> 9d0d247ba04d0873499166622aadeb2bf9beec7e
 Alcoholic 
 Amateur 
 Analphabet 
@@ -244,4 +248,8 @@ Xenophobe
 XXX Watcher 
 Yak 
 Yeti 
+<<<<<<< HEAD
 Zit face 
+=======
+Zit face 
+>>>>>>> 9d0d247ba04d0873499166622aadeb2bf9beec7e

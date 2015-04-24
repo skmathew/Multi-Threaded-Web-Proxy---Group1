@@ -1,0 +1,6 @@
+                                            		Olawale Victor Akinnawo
+					    		CSCE 3530
+
+20 - 23 Apr -- Make input file for the filter.
+	       
+	       Check program for errors.

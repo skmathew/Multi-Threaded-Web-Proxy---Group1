@@ -1,0 +1,12 @@
+Viivi Raina
+Individual Journal
+
+4/22
+Worked on function to open server socket to send HTTP
+request to remote host, receive requested page from
+socket, and redirect received page into a file of its
+own.
+
+4/23
+Debugged the HTTP request code and worked on fixing
+the bad language filter. Wrote project report.
